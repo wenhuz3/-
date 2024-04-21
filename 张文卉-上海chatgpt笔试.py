@@ -13,6 +13,7 @@ def fill_table_content(output, table):
 
     # First, detect if there is a multi-row header
     for cell in table["table_cells"]:
+        # 如果第一行中有占位超过一行的cell（一般是第一行第一列），说明是多层级table
         if cell["start_row"] == 0 and cell["end_row"] > cell["start_row"]:
             multi_row_header = True
             header_rows.extend(range(cell["start_row"], cell["end_row"] + 1))
@@ -23,12 +24,15 @@ def fill_table_content(output, table):
         # Handle multi-row headers
         if multi_row_header:
             if line["start_row"] in header_rows:
+                # 确保 output["header"] 列表的长度足以包含到当前单元格的结束行
                 while len(output["header"]) <= line["end_row"]:
                     output["header"].append([])
-
+                # 遍历当前单元格覆盖的所有行，处理跨行的情况
                 for header_row in range(line["start_row"], line["end_row"] + 1):
+                    # 确保每一行的长度足以包含到当前单元格的结束列
                     while len(output["header"][header_row]) <= line["end_col"]:
                         output["header"][header_row].append("")
+                    # 遍历当前cell覆盖的所有列
                     for header_col in range(line["start_col"], line["end_col"] + 1):
                         output["header"][header_row][header_col] = line["text"].replace(
                             "\n", ""
@@ -40,14 +44,16 @@ def fill_table_content(output, table):
                     output["header"].append([])
                 output["header"][0].append(line["text"].replace("\n", ""))
 
-        # Handle key index and data values
+        # Handle key index
         if (
             line["start_row"] > 0
             and line["start_col"] == 0
             and not line["start_row"] in header_rows
         ):
             output["key_index"].append(line["text"].replace("\n", ""))
-        elif line["start_row"] > 0 and line["start_col"] != 0:
+        # Handle values
+        elif line["start_row"] > 0 and line["start_col"] != 0 and not line["start_row"] in header_rows:
+            # 如果换行了则append一行的values
             if prev_col >= line["start_col"]:
                 if values:  # Only append if values are non-empty
                     output["values"].append(values)
@@ -67,7 +73,7 @@ def fill_title_and_unit(output, tables, index):
         unit_parts = []  # store unit 单位 币种
         possible_titles = []  # collect all possible headers
 
-        # search reversely to find unit
+        # search reversely in the element before the table to find unit
         for line in reversed(lines):
             # collect all lines that is not "适用"and"不适用" to be possible titles
             if "适用" not in line["text"] and "不适用" not in line["text"]:
@@ -86,7 +92,7 @@ def fill_title_and_unit(output, tables, index):
                 filtered_titles = [
                     title
                     for title in possible_titles
-                    if "单位:" not in title and "币种:" not in title
+                    if "单位:" not in title and "币种:" not in title and "2021年年度报告" not in title
                 ]
                 if filtered_titles:
                     output["title"] = filtered_titles[0] #title is the first text that are not unit
@@ -103,15 +109,16 @@ def process_tables(current_tables, next_tables):
             if (
                 i == 1
             ):  # The table is at index 1, which means it's the second table or content block on the page
-                # get the first table block on the page
+                # get the first block on the page that is not header
                 previous_table_lines = [
                     line["text"] for line in current_tables[0]["lines"]
                 ]
+                # 如果table前只有页眉则判定为连续table
                 if (
                     len(previous_table_lines) == 1
                     and "2021年年度报告" in previous_table_lines[0]
                 ):
-                    # Skip processing this table as it's the header of the page
+                    # Skip processing this table as it's the second half of table in the previous page
                     continue
             output = {
                 "title": "",
@@ -138,9 +145,28 @@ def process_tables(current_tables, next_tables):
                 and len(next_tables[0]["lines"]) == 1 
                 and "2021年年度报告" in next_tables[0]["lines"][0]["text"]
             ):
-                fill_table_content(
-                    output, next_tables[1]
-                )  # Merge content from the second table of the next page
+                prev_col = 0
+                values = []
+                for line in next_tables[1]["table_cells"]:
+                  # Handle key index
+                  if (
+                      line["start_row"] > 0
+                      and line["start_col"] == 0
+                  ):
+                      output["key_index"].append(line["text"].replace("\n", ""))
+                  # Handle values
+                  elif line["start_row"] > 0 and line["start_col"] != 0:
+                      # 如果换行了则append一行的values
+                      if prev_col >= line["start_col"]:
+                          if values:  # Only append if values are non-empty
+                              output["values"].append(values)
+                          values = []
+                      values.append(line["text"].replace("\n", ""))
+                      prev_col = line["start_col"]
+
+                # Ensure the last set of values is added
+                if values:
+                    output["values"].append(values)
 
             outputs.append(output)
     return outputs
@@ -159,7 +185,3 @@ for i in range(len(data)):
     outputs.extend(output)
 
 print(outputs)
-
-
-# Edge case 1: title，unit和table不在同一页上: 不能添加page header为title，到上一页检索最后一个block
-# 忽略"/203"形式的页脚和“适用 不适用”
